@@ -36,7 +36,14 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-haiku-5-5"
     anthropic_max_tokens: int = Field(default=16000, gt=0)
 
-    # Database (used from phase B2 on)
+    # Embedding ingestion pacing. Defaults sit ~20% under Gemini's free-tier limits
+    # for gemini-embedding-001 (100 RPM, 30,000 TPM) to leave headroom.
+    embed_rpm: int = Field(default=80, gt=0)
+    embed_tpm: int = Field(default=24_000, gt=0)
+
+    # Database. DATABASE_URL is the pooled URL used by the API; DATABASE_URL_DIRECT
+    # (non-pooled) is used by migrations and ingestion. Both accept Neon's
+    # `postgresql://...?sslmode=require` form.
     database_url: SecretStr | None = None
     database_url_direct: SecretStr | None = None
 
