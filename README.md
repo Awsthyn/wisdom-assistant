@@ -4,7 +4,7 @@ A study assistant for the five wisdom books of the World English Bible — Job, 
 Proverbs, Ecclesiastes and Song of Songs — with semantic search, RAG chat that cites
 verses, a tool-calling agent and an MCP server.
 
-> Status: in development. Corpus ingestion is done; search and chat come next.
+> Status: in development. Ingestion and search are done; chat comes next.
 
 ## Stack
 
@@ -95,6 +95,26 @@ uv run python -m app.scripts.ingest status
 can be stopped (Ctrl+C, error, quota) and resumed. It paces itself under `EMBED_RPM`
 requests and `EMBED_TPM` estimated tokens per minute. When the daily quota runs out it
 stops cleanly and asks you to run it again the next day.
+
+## Search
+
+`GET /api/v1/search?q=...&k=8&book=Prov`
+
+- **Exact references** (`John 3:16`, `Jn 3:16-18`, `Psalm 23`, `1 Cor 13:4`) are
+  read straight from the database, from any of the 66 books, **without an embedding
+  call**. Books outside the corpus come back with `in_corpus: false`. Common English
+  abbreviations and ordinals (`1 Jn`, `First John`, `II Kings`) are understood;
+  impossible references such as `John 99:1` return 422, and missing verses return 404.
+  `k` and `book` do not apply to them.
+- **Anything else** is embedded as a query and matched by cosine similarity against
+  the corpus passages (HNSW index). `book` restricts results to one corpus book
+  (`Job`, `Ps`, `Prov`, `Eccl`, `Song`); any other value returns 422. With a filter,
+  pgvector's iterative index scan keeps searching until `k` matches are found.
+- Each result has `reference`, `book`, `book_name`, `chapter`, `start_verse`,
+  `end_verse`, `text`, `score` (null for exact references), `in_corpus` and `url`
+  (the chapter on ebible.org).
+- `q` is 3–300 characters and `k` is 1–20. If the embedding quota is exhausted, semantic
+  search returns 503; exact references keep working.
 
 ## Attributions
 

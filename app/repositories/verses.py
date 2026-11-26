@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -75,3 +75,30 @@ async def verses_for_book(session: AsyncSession, book_id: int) -> list[tuple[int
         .order_by(Verse.chapter, Verse.verse)
     )
     return [(chapter, verse, text) for chapter, verse, text in result.all()]
+
+
+async def verses_in_range(
+    session: AsyncSession,
+    osis_code: str,
+    start: tuple[int, int],
+    end: tuple[int, int | None],
+) -> list[StoredVerse]:
+    """Verses of one book from `start` to `end` (`(chapter, verse)`, inclusive), in order.
+
+    `end = (chapter, None)` means "to the end of that chapter". Verses that do not
+    exist are simply absent from the result.
+    """
+    position = tuple_(Verse.chapter, Verse.verse)
+    end_chapter, end_verse = end
+    upper = (
+        position <= tuple_(end_chapter, end_verse)
+        if end_verse is not None
+        else Verse.chapter <= end_chapter
+    )
+    result = await session.execute(
+        select(Book.osis_code, Verse.chapter, Verse.verse, Verse.text, Book.in_corpus)
+        .join(Book)
+        .where(Book.osis_code == osis_code, position >= tuple_(*start), upper)
+        .order_by(Verse.chapter, Verse.verse)
+    )
+    return [StoredVerse(*row) for row in result.all()]

@@ -2,10 +2,10 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Passage
+from app.db.models import Book, Passage
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,3 +128,49 @@ async def save_embeddings(
             .where(Passage.id == passage_id)
             .values(embedding=vector, embedded_at=now)
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PassageHit:
+    osis_code: str
+    chapter: int
+    start_verse: int
+    end_verse: int
+    reference: str
+    text: str
+    in_corpus: bool
+    distance: float
+
+
+async def nearest_passages(
+    session: AsyncSession, vector: Sequence[float], k: int, osis_code: str | None = None
+) -> list[PassageHit]:
+    """The `k` embedded passages closest to `vector` by cosine distance, nearest first.
+
+    Uses the HNSW index. With a book filter, a plain HNSW scan visits only
+    `hnsw.ef_search` candidates and filters afterwards, so a small book could come
+    back with fewer than `k` results; pgvector's iterative scan (>= 0.8) keeps
+    scanning until `k` rows pass the filter, in exact distance order.
+    """
+    await session.execute(text("SET LOCAL hnsw.iterative_scan = strict_order"))
+    distance = Passage.embedding.cosine_distance(list(vector)).label("distance")
+    stmt = (
+        select(
+            Book.osis_code,
+            Passage.chapter,
+            Passage.start_verse,
+            Passage.end_verse,
+            Passage.reference,
+            Passage.text,
+            Book.in_corpus,
+            distance,
+        )
+        .join(Book, Book.id == Passage.book_id)
+        .where(Passage.embedding.is_not(None))
+        .order_by(distance)
+        .limit(k)
+    )
+    if osis_code is not None:
+        stmt = stmt.where(Book.osis_code == osis_code)
+    result = await session.execute(stmt)
+    return [PassageHit(*row) for row in result.all()]
