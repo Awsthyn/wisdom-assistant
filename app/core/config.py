@@ -1,0 +1,58 @@
+"""Application settings, loaded only from environment variables (and a local .env)."""
+
+from functools import lru_cache
+from typing import Annotated, Literal
+
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+LLMProviderName = Literal["gemini", "anthropic"]
+
+
+class Settings(BaseSettings):
+    """Typed view of the process environment.
+
+    Secrets are `SecretStr` so they never show up in reprs or logs.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # LLM provider selection
+    llm_provider: LLMProviderName = "gemini"
+    llm_timeout_seconds: float = Field(default=60.0, gt=0)
+
+    # Gemini (also used for embeddings when the chat provider is Anthropic)
+    gemini_api_key: SecretStr | None = None
+    gemini_chat_model: str = "gemini-3.5-flash-lite"
+    gemini_embed_model: str = "gemini-embedding-001"
+    embedding_dimensions: int = 768
+
+    # Anthropic (optional)
+    anthropic_api_key: SecretStr | None = None
+    anthropic_model: str = "claude-haiku-5-5"
+    anthropic_max_tokens: int = Field(default=16000, gt=0)
+
+    # Database (used from phase B2 on)
+    database_url: SecretStr | None = None
+    database_url_direct: SecretStr | None = None
+
+    # HTTP
+    cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=list[str])
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, value: object) -> object:
+        """Accept a comma-separated string such as `http://a.com,http://b.com`."""
+        if isinstance(value, str):
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Return the process-wide settings instance."""
+    return Settings()

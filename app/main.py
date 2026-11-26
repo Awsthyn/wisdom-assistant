@@ -1,0 +1,41 @@
+"""FastAPI application entry point."""
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.core.config import Settings, get_settings
+from app.routers import health
+
+DESCRIPTION = """
+Study assistant for the five wisdom books of the World English Bible
+(Job, Psalms, Proverbs, Ecclesiastes, Song of Songs).
+
+Semantic search, RAG chat with verified verse citations, a tool-calling agent
+and an MCP server.
+
+Scripture text: World English Bible (ebible.org), public domain.
+Cross references: OpenBible.info, CC-BY.
+"""
+
+
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """Build the FastAPI app. Accepts explicit settings so tests can inject their own."""
+    settings = settings or get_settings()
+    app = FastAPI(
+        title="wisdom-assistant",
+        summary="RAG study assistant for the wisdom books of the World English Bible.",
+        description=DESCRIPTION,
+        version="0.1.0",
+    )
+    if settings.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_origins,
+            allow_methods=["GET", "POST"],
+            allow_headers=["*"],
+        )
+    app.include_router(health.router)
+    return app
+
+
+app = create_app()

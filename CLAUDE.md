@@ -36,7 +36,12 @@ LLM: Gemini (free tier) by default, switchable to Anthropic via an environment v
   - Never skip a layer (e.g. a router must not call a repository directly).
 - `app/llm/` defines a common provider interface with Gemini and Anthropic implementations.
   **No module outside `app/llm/` may import `google.genai` or `anthropic` directly.**
-  The active provider is selected by an environment variable.
+  The active provider is selected by `LLM_PROVIDER=gemini|anthropic`.
+- **Embeddings always come from Gemini**, even when `LLM_PROVIDER=anthropic` (Anthropic has no
+  embeddings API). `GEMINI_API_KEY` is therefore always required.
+- SDK exceptions never leave `app/llm/`: quota errors (429) become `QuotaExceededError` and are
+  not retried; timeouts, connection errors and 5xx are retried up to 3 times with exponential
+  backoff (`app/llm/retry.py`). SDK-level retries are disabled so there is a single policy.
 
 ## Assistant principles
 
