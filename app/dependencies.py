@@ -4,6 +4,10 @@ Resources are created lazily on first use, so the app starts (and `/health`
 answers) even when the database or the LLM are not configured, and an exact
 reference search never needs an LLM key. Tests replace the dependencies with
 `app.dependency_overrides`.
+
+The demo guard (rate limit, caches, quota status) shares the API's database; it
+is disabled when DATABASE_URL is not set, which also makes every database-backed
+endpoint answer 503, so no LLM call can happen unguarded.
 """
 
 from collections.abc import AsyncIterator, Sequence
@@ -15,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from app.core.config import Settings
 from app.db.session import create_engine, session_factory
 from app.llm import Embedder, EmbedTask, LLMConfigError, LLMProvider, build_llm_provider
+from app.services.guard import CachedQueryEmbedder, DemoGuard
 
 
 class NotConfiguredError(RuntimeError):
@@ -27,6 +32,7 @@ class AppResources:
         self._engine: AsyncEngine | None = None
         self._sessions: async_sessionmaker[AsyncSession] | None = None
         self._llm: LLMProvider | None = None
+        self._guard: DemoGuard | None = None
 
     def sessions(self) -> async_sessionmaker[AsyncSession]:
         if self._sessions is None:
@@ -35,6 +41,15 @@ class AppResources:
             self._engine = create_engine(self.settings.database_url.get_secret_value())
             self._sessions = session_factory(self._engine)
         return self._sessions
+
+    def guard(self) -> DemoGuard:
+        if self._guard is None:
+            try:
+                sessions = self.sessions()
+            except NotConfiguredError:
+                sessions = None
+            self._guard = DemoGuard.from_settings(sessions, self.settings)
+        return self._guard
 
     def llm(self) -> LLMProvider:
         if self._llm is None:
@@ -76,8 +91,21 @@ async def get_session(
         yield session
 
 
-def get_embedder(resources: Annotated[AppResources, Depends(_resources)]) -> Embedder:
+def get_guard(resources: Annotated[AppResources, Depends(_resources)]) -> DemoGuard:
+    return resources.guard()
+
+
+def get_base_embedder(resources: Annotated[AppResources, Depends(_resources)]) -> Embedder:
+    """The provider's embedder, without the query-embedding cache."""
     return LazyEmbedder(resources)
+
+
+def get_embedder(
+    base: Annotated[Embedder, Depends(get_base_embedder)],
+    guard: Annotated[DemoGuard, Depends(get_guard)],
+) -> Embedder:
+    """Query embeddings go through the cache (same normalized text, same vector)."""
+    return CachedQueryEmbedder(base, guard)
 
 
 def get_llm(resources: Annotated[AppResources, Depends(_resources)]) -> LLMProvider:

@@ -27,8 +27,9 @@ from app.llm import (
     ToolResultMessage,
     UserMessage,
 )
-from app.services.chat import sanitize
-from app.services.citations import CitationReport, verify_citations
+from app.services.chat import QUOTA_MESSAGE, sanitize
+from app.services.citations import Citation, CitationReport, verify_citations
+from app.services.guard import StreamEvent
 from app.services.search import SearchHit
 from app.tools import Tool, ToolContext, ToolError
 
@@ -71,7 +72,6 @@ TOOL_LIMIT_MESSAGE: Final = (
     "Not executed: the limit of tool calls for this question has been reached. "
     "Write the final answer with the texts you already have."
 )
-QUOTA_MESSAGE: Final = "The assistant has reached its usage limit for now. Please try again later."
 INTERNAL_MESSAGE: Final = "Something went wrong while answering. Please try again."
 LIMIT_MESSAGE: Final = (
     "The assistant could not finish within its step limit. Try a narrower question."
@@ -219,3 +219,41 @@ async def agent_events(
         messages.append(ToolResultMessage(tuple(results)))
 
     yield ErrorEvent("iteration_limit", LIMIT_MESSAGE)
+
+
+def _citation_data(c: Citation) -> dict[str, Any]:
+    return {
+        "cited": c.cited,
+        "reference": c.reference,
+        "book": c.book,
+        "url": c.url,
+        "outside_corpus": c.outside_corpus,
+        "reason": c.reason,
+    }
+
+
+def to_stream_event(event: AgentEvent) -> StreamEvent:
+    """The JSON-ready SSE form of an agent event (what clients receive and the cache stores)."""
+    match event:
+        case ToolCallEvent(name=name, arguments=arguments):
+            return StreamEvent("tool_call", {"name": name, "arguments": dict(arguments)})
+        case ToolResultEvent(name=name, summary=summary, is_error=is_error):
+            return StreamEvent(
+                "tool_result", {"name": name, "summary": summary, "is_error": is_error}
+            )
+        case TokenEvent(text=text):
+            return StreamEvent("token", {"text": text})
+        case CitationsEvent(report=report):
+            return StreamEvent(
+                "citations",
+                {
+                    "valid": [_citation_data(c) for c in report.valid],
+                    "discarded": [_citation_data(c) for c in report.discarded],
+                },
+            )
+        case DoneEvent(model=model, iterations=iterations, tool_calls=tool_calls):
+            return StreamEvent(
+                "done", {"model": model, "iterations": iterations, "tool_calls": tool_calls}
+            )
+        case ErrorEvent(code=code, message=message):
+            return StreamEvent("error", {"code": code, "message": message})

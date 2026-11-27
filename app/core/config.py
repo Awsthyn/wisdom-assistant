@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from typing import Annotated, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -49,6 +50,17 @@ class Settings(BaseSettings):
     chat_top_k: int = Field(default=8, ge=1, le=20)
     chat_min_score: float = Field(default=0.57, ge=0, le=1)
 
+    # Public-demo protection (state lives in Postgres: Render Free restarts lose memory).
+    # Requests per client IP per fixed one-hour window, shared by /chat and /agent.
+    rate_limit_per_hour: int = Field(default=10, ge=1)
+    # How many proxies in front of the app append to X-Forwarded-For (Render: 1).
+    # 0 ignores the header and uses the socket peer address.
+    trusted_proxy_hops: int = Field(default=1, ge=0, le=5)
+    # Cached answers and query embeddings are reused for this many days.
+    cache_ttl_days: int = Field(default=30, ge=1)
+    # Gemini's free-tier daily quota resets at midnight Pacific time.
+    quota_reset_timezone: str = "America/Los_Angeles"
+
     # Database. DATABASE_URL is the pooled URL used by the API; DATABASE_URL_DIRECT
     # (non-pooled) is used by migrations and ingestion. Both accept Neon's
     # `postgresql://...?sslmode=require` form.
@@ -57,6 +69,16 @@ class Settings(BaseSettings):
 
     # HTTP
     cors_origins: Annotated[list[str], NoDecode] = Field(default_factory=list[str])
+
+    @field_validator("quota_reset_timezone")
+    @classmethod
+    def _check_timezone(cls, value: str) -> str:
+        """Fail at startup, not at the first quota error, on an unknown IANA zone."""
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown time zone: {value!r}") from exc
+        return value
 
     @field_validator("cors_origins", mode="before")
     @classmethod

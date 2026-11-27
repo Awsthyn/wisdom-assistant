@@ -11,7 +11,7 @@ import logging
 import re
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +23,8 @@ from app.llm import (
     QuotaExceededError,
     UserMessage,
 )
-from app.services.citations import CitationReport, verify_citations
+from app.services.citations import Citation, CitationReport, verify_citations
+from app.services.guard import StreamEvent
 from app.services.search import SearchHit, semantic_hits
 
 logger = logging.getLogger(__name__)
@@ -58,8 +59,7 @@ NO_RESULTS_MESSAGE: Final = (
     "theme these books address, such as wisdom, suffering, justice, friendship or love."
 )
 QUOTA_MESSAGE: Final = (
-    "The assistant has reached its usage limit for now. Please try again later; "
-    "exact references in search (e.g. 'Psalm 23') still work."
+    "The free AI quota for today is used up. Cached example questions still work: try one of them."
 )
 INTERNAL_MESSAGE: Final = "Something went wrong while answering. Please try again."
 
@@ -180,3 +180,52 @@ async def chat_events(
 
     yield CitationsEvent(verify_citations("".join(answer), passages))
     yield DoneEvent(llm.chat_model)
+
+
+def _citation_data(c: Citation) -> dict[str, Any]:
+    return {
+        "cited": c.cited,
+        "reference": c.reference,
+        "book": c.book,
+        "url": c.url,
+        "reason": c.reason,
+    }
+
+
+def to_stream_event(event: ChatEvent) -> StreamEvent:
+    """The JSON-ready SSE form of a chat event (what clients receive and the cache stores)."""
+    match event:
+        case SourcesEvent(passages=passages):
+            return StreamEvent(
+                "sources",
+                {
+                    "passages": [
+                        {
+                            "id": n,  # the number the passage has in the prompt
+                            "reference": p.reference,
+                            "book": p.book.osis_code,
+                            "chapter": p.chapter,
+                            "start_verse": p.start_verse,
+                            "end_verse": p.end_verse,
+                            "text": p.text,
+                            "url": p.url,
+                            "score": p.score,
+                        }
+                        for n, p in enumerate(passages, start=1)
+                    ]
+                },
+            )
+        case TokenEvent(text=text):
+            return StreamEvent("token", {"text": text})
+        case CitationsEvent(report=report):
+            return StreamEvent(
+                "citations",
+                {
+                    "valid": [_citation_data(c) for c in report.valid],
+                    "discarded": [_citation_data(c) for c in report.discarded],
+                },
+            )
+        case DoneEvent(model=model):
+            return StreamEvent("done", {"model": model})
+        case ErrorEvent(code=code, message=message):
+            return StreamEvent("error", {"code": code, "message": message})

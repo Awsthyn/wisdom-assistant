@@ -10,6 +10,9 @@ _ENV_VARS = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_MODEL",
     "CORS_ORIGINS",
+    # The demo guard writes to DATABASE_URL; unit tests must never reach a real database.
+    "DATABASE_URL",
+    "DATABASE_URL_DIRECT",
 )
 
 

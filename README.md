@@ -4,7 +4,7 @@ A study assistant for the five wisdom books of the World English Bible — Job, 
 Proverbs, Ecclesiastes and Song of Songs — with semantic search, RAG chat that cites
 verses, a tool-calling agent and an MCP server.
 
-> Status: in development. Ingestion, search, RAG chat, the tool-calling agent and the MCP server are done; rate limiting, caching and quota protection come next.
+> Status: in development. Ingestion, search, RAG chat, the tool-calling agent, the MCP server and the public-demo protection (rate limit, caches, quota status) are done; the web UI comes next.
 
 ## Stack
 
@@ -140,7 +140,7 @@ Server-Sent Events:
 | `sources` | the retrieved passages: `id`, `reference`, `text`, `url`, `score` |
 | `token` | `{"text": ...}` answer fragments, as the LLM produces them |
 | `citations` | `valid` and `discarded` citations (each discarded one with a `reason`) |
-| `done` | `{"model": ...}` |
+| `done` | `{"model": ...}`, plus `"cached": true` when replayed from the cache |
 | `error` | `{"code", "message"}` with code `quota_exceeded`, `no_results` or `internal` |
 
 ```sh
@@ -187,7 +187,7 @@ The agent answers as Server-Sent Events:
 | `tool_result` | `{"name", "summary", "is_error"}`, a short line, not the full result |
 | `token` | `{"text"}`, the final answer |
 | `citations` | `valid` / `discarded`, each with `outside_corpus` |
-| `done` | `{"model", "iterations", "tool_calls"}` |
+| `done` | `{"model", "iterations", "tool_calls"}`, plus `"cached": true` when replayed |
 | `error` | `{"code", "message"}` with code `quota_exceeded`, `internal` or `iteration_limit` |
 
 - The agent stops after **5 model calls and 8 tool calls**. On its last turn the model
@@ -201,6 +201,42 @@ The agent answers as Server-Sent Events:
 - The answer arrives as a single `token` event, because `generate_with_tools` is not a
   streaming call. The `tool_call` and `tool_result` events show progress while the
   agent works.
+
+## Protecting the public demo
+
+The demo runs on free tiers, so `/chat` and `/agent` are guarded. All the state lives in
+Postgres (migration `0003`), because Render Free restarts the process and loses memory.
+
+- **Rate limit.** `RATE_LIMIT_PER_HOUR` (10) requests per client IP per fixed one-hour
+  window, shared by `/chat` and `/agent`. The 11th gets `429` with a `Retry-After`
+  header and a message saying when to try again. The IP comes from `X-Forwarded-For`:
+  proxies append the address they saw, so only the last `TRUSTED_PROXY_HOPS` (1 on
+  Render) entries are trusted and anything a client prepends is ignored; invalid values
+  fall back to the socket address, and IPv6 clients are grouped by `/64`. `/search` is
+  not rate limited (it costs at most one embedding).
+- **Answer cache.** Key = SHA-256 of (mode, normalized question, provider, model);
+  normalized means lowercase, single spaces and no final punctuation, so
+  `What is love?` and `what is love` share it. A hit replays the stored events
+  (`sources`, `token`, `citations`, `done` with `"cached": true`) without calling the
+  LLM and without counting against the rate limit. Entries live `CACHE_TTL_DAYS` (30).
+  Chat questions sent with `history` are neither cached nor replayed.
+- **Query-embedding cache.** The same normalized text reuses its stored vector in
+  search, chat and the agent's `search_passages`.
+- **Quota status.** When the provider reports its quota exhausted, the visitor gets
+  `error` / `quota_exceeded` ("The free AI quota for today is used up. Cached example
+  questions still work: try one of them.") and the moment is stored. `GET /health`
+  then reports `"llm_quota": "exhausted"` and `llm_quota_resets_at` until the next
+  daily reset (midnight in `QUOTA_RESET_TIMEZONE`, Pacific time for Gemini), so the UI
+  can warn before anyone asks. The next successful answer clears it (a short
+  per-minute 429 looks the same as the daily one). Without a database `llm_quota` is
+  omitted.
+- **Examples.** `GET /api/v1/examples` returns six curated questions. Fill the cache
+  with their real answers after deploying (and after changing the model):
+
+```sh
+uv run python -m app.scripts.warm_cache            # chat answers; skips cached ones
+uv run python -m app.scripts.warm_cache --agent    # agent answers too
+```
 
 ## MCP server
 
