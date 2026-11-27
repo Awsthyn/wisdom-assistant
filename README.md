@@ -4,7 +4,7 @@ A study assistant for the five wisdom books of the World English Bible — Job, 
 Proverbs, Ecclesiastes and Song of Songs — with semantic search, RAG chat that cites
 verses, a tool-calling agent and an MCP server.
 
-> Status: in development. Ingestion, search and RAG chat are done; the agent comes next.
+> Status: in development. Ingestion, search, RAG chat and the tool-calling agent are done; the MCP server comes next.
 
 ## Stack
 
@@ -88,6 +88,7 @@ uv run python -m app.scripts.ingest download     # -> data/raw/ (git-ignored)
 uv run python -m app.scripts.ingest load         # 66 books, verses, sanity checks
 uv run python -m app.scripts.ingest chunk        # passages for the 5 corpus books
 uv run python -m app.scripts.ingest embed        # resumable; --limit N to try a few
+uv run python -m app.scripts.ingest xrefs        # OpenBible.info cross references; --refresh
 uv run python -m app.scripts.ingest status
 ```
 
@@ -95,6 +96,18 @@ uv run python -m app.scripts.ingest status
 can be stopped (Ctrl+C, error, quota) and resumed. It paces itself under `EMBED_RPM`
 requests and `EMBED_TPM` estimated tokens per minute. When the daily quota runs out it
 stops cleanly and asks you to run it again the next day.
+
+`xrefs` loads [OpenBible.info cross references](https://www.openbible.info/labs/cross-references/)
+(CC-BY) with **at least 5 votes**, for all 66 books, because targets outside the wisdom
+books exist in `verses`. It rebuilds the table in one transaction, so re-running it is
+safe. Current numbers:
+
+- 344,799 source rows, of which 118,592 are loaded. 226,202 have fewer than 5 votes
+  and 5 are ranges that span two books.
+- 23,507 cross references start in a corpus book.
+- The table takes 16.9 MB with its indexes, and the whole database 45 MB.
+- Target ranges may cross chapters (`Romans 1:32-2:1`), so the table also stores
+  `to_end_chapter`.
 
 ## Search
 
@@ -149,6 +162,45 @@ How the answer stays grounded:
   including grouped ones like `[Proverbs 14:31, 22:9]`, normalizes it with the
   reference parser and keeps it only if its book is in the corpus and every verse
   it names is in the retrieved passages. Anything else is reported as discarded.
+
+## Agent
+
+`POST /api/v1/agent` with `{"question": "..."}` runs a tool-calling loop. The model
+decides which tools to call, may call them several times, and then answers. It works
+with both providers through `generate_with_tools`: Gemini function calling and
+Anthropic tool use are translated inside `app/llm/`.
+
+The tools are defined once in [app/tools/](app/tools/), each with its JSON Schema
+generated from a Pydantic model. The MCP server reuses them.
+
+| Tool | What it returns |
+|---|---|
+| `lookup_reference(reference)` | Exact text of a reference from any of the 66 books, with `in_corpus` |
+| `search_passages(query, k=5, book=None)` | Semantic search over the five wisdom books |
+| `cross_references(reference, limit=10)` | Cross references by votes, each with its text and `in_corpus` |
+
+The agent answers as Server-Sent Events:
+
+| Event | Data |
+|---|---|
+| `tool_call` | `{"name", "arguments"}` |
+| `tool_result` | `{"name", "summary", "is_error"}`, a short line, not the full result |
+| `token` | `{"text"}`, the final answer |
+| `citations` | `valid` / `discarded`, each with `outside_corpus` |
+| `done` | `{"model", "iterations", "tool_calls"}` |
+| `error` | `{"code", "message"}` with code `quota_exceeded`, `internal` or `iteration_limit` |
+
+- The agent stops after **5 model calls and 8 tool calls**. On its last turn the model
+  is told to answer with what it has.
+- Bad arguments, unknown references and unknown tools are returned to the model as tool
+  errors, so it can correct itself; they never end the run.
+- Citations get the same code-level check as in chat, now against every text the tools
+  returned. A text from outside the wisdom books is **valid only if a tool returned
+  it**, and it is flagged `outside_corpus: true` so the UI can present it as a cross
+  reference.
+- The answer arrives as a single `token` event, because `generate_with_tools` is not a
+  streaming call. The `tool_call` and `tool_result` events show progress while the
+  agent works.
 
 ## Attributions
 

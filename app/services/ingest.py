@@ -25,8 +25,10 @@ from app.ingest.chunking import (
 )
 from app.ingest.pacing import MinuteRateLimiter, estimate_tokens
 from app.ingest.vpl import ParsedVerse, parse_vpl
+from app.ingest.xrefs import XrefParseError, parse_xrefs
 from app.llm import Embedder, EmbedTask, QuotaExceededError
 from app.repositories import books as books_repo
+from app.repositories import cross_references as xrefs_repo
 from app.repositories import passages as passages_repo
 from app.repositories import stats as stats_repo
 from app.repositories import verses as verses_repo
@@ -34,6 +36,12 @@ from app.repositories import verses as verses_repo
 SOURCE_URL = "https://ebible.org/Scriptures/engwebp_vpl.zip"
 SOURCE_ZIP = "engwebp_vpl.zip"
 SOURCE_MEMBER = "engwebp_vpl.txt"
+
+XREFS_URL = "https://a.openbible.info/data/cross-references.zip"
+XREFS_ZIP = "cross-references.zip"
+XREFS_MEMBER = "cross_references.txt"
+# Only cross references with at least this many OpenBible.info votes are loaded.
+XREFS_MIN_VOTES = 5
 
 # Gemini's batch embedding endpoint accepts at most 100 texts per request.
 MAX_EMBED_BATCH = 100
@@ -331,6 +339,7 @@ class StatusReport:
     passages: int
     embedded_passages: int
     database_bytes: int
+    cross_references: int = 0
 
 
 async def ingest_status(session: AsyncSession) -> StatusReport:
@@ -338,6 +347,113 @@ async def ingest_status(session: AsyncSession) -> StatusReport:
     verses_total, verses_in_corpus = await verses_repo.count_verses(session)
     passages_total, embedded = await passages_repo.count_passages(session)
     size = await stats_repo.database_size_bytes(session)
+    xrefs_total, _ = await xrefs_repo.count_cross_references(session)
     return StatusReport(
-        books_total, books_in_corpus, verses_total, verses_in_corpus, passages_total, embedded, size
+        books_total,
+        books_in_corpus,
+        verses_total,
+        verses_in_corpus,
+        passages_total,
+        embedded,
+        size,
+        xrefs_total,
+    )
+
+
+# --- cross references --------------------------------------------------------
+
+
+async def download_xrefs(raw_dir: Path, url: str = XREFS_URL) -> Path:
+    """Download OpenBible.info's cross references and extract only the data file."""
+    async with httpx2.AsyncClient(follow_redirects=True, timeout=120) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+    return await asyncio.to_thread(_save_xrefs, response.content, raw_dir, url)
+
+
+def _save_xrefs(content: bytes, raw_dir: Path, url: str) -> Path:
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = raw_dir / XREFS_ZIP
+    zip_path.write_bytes(content)
+    txt_path = raw_dir / XREFS_MEMBER
+    with zipfile.ZipFile(zip_path) as archive:
+        if XREFS_MEMBER not in archive.namelist():
+            raise IngestError(f"{XREFS_MEMBER} not found in {url}")
+        # Read the single member by name; never extract arbitrary archive paths.
+        txt_path.write_bytes(archive.read(XREFS_MEMBER))
+    return txt_path
+
+
+def read_xrefs_lines(path: Path) -> list[str]:
+    if not path.is_file() or path.stat().st_size == 0:
+        raise IngestError(f"{path} is missing or empty; run `ingest xrefs --refresh`")
+    with path.open(encoding="utf-8-sig") as handle:
+        return handle.readlines()
+
+
+@dataclass(frozen=True, slots=True)
+class XrefReport:
+    source_rows: int
+    loaded: int
+    from_corpus: int
+    skipped_low_votes: int
+    skipped_cross_book: int
+    skipped_unknown_book: int
+    duplicates: int
+    table_bytes: int
+
+
+async def load_xrefs(
+    session: AsyncSession,
+    lines: Iterable[str],
+    *,
+    min_votes: int = XREFS_MIN_VOTES,
+) -> XrefReport:
+    """Replace the cross_references table with the rows that have `votes >= min_votes`.
+
+    Every book is kept, not only the corpus: targets outside the wisdom books exist
+    in `verses`. Idempotent: the table is rebuilt in one transaction. Requires
+    `ingest load` to have run first.
+    """
+    try:
+        parsed = parse_xrefs(lines, min_votes=min_votes)
+    except XrefParseError as exc:
+        raise IngestError(f"cross references: {exc}") from exc
+
+    book_ids = await books_repo.book_ids(session)
+    if not book_ids:
+        raise IngestError("no books in the database; run `ingest load` first")
+    rows: list[xrefs_repo.CrossReferenceRow] = []
+    unknown = 0
+    for x in parsed.rows:
+        source, target = book_ids.get(x.from_book), book_ids.get(x.to_book)
+        if source is None or target is None:
+            unknown += 1
+            continue
+        rows.append(
+            xrefs_repo.CrossReferenceRow(
+                source,
+                x.from_chapter,
+                x.from_verse,
+                target,
+                x.to_chapter,
+                x.to_start_verse,
+                x.to_end_chapter,
+                x.to_end_verse,
+                x.votes,
+            )
+        )
+    await xrefs_repo.replace_all(session, rows)
+    await session.commit()
+
+    total, from_corpus = await xrefs_repo.count_cross_references(session)
+    return XrefReport(
+        source_rows=parsed.total,
+        loaded=total,
+        from_corpus=from_corpus,
+        skipped_low_votes=parsed.skipped_low_votes,
+        skipped_cross_book=parsed.skipped_cross_book,
+        skipped_unknown_book=unknown,
+        duplicates=parsed.duplicates,
+        table_bytes=await xrefs_repo.table_size_bytes(session),
     )

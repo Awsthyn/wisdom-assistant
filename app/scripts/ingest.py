@@ -4,6 +4,7 @@
     uv run python -m app.scripts.ingest load
     uv run python -m app.scripts.ingest chunk
     uv run python -m app.scripts.ingest embed [--limit N]
+    uv run python -m app.scripts.ingest xrefs [--refresh]
     uv run python -m app.scripts.ingest status
 
 Uses DATABASE_URL_DIRECT (falls back to DATABASE_URL). Run
@@ -123,6 +124,29 @@ async def cmd_embed(settings: Settings, args: argparse.Namespace) -> int:
     return await _with_sessions(settings, work)
 
 
+async def cmd_xrefs(settings: Settings, args: argparse.Namespace) -> int:
+    path = RAW_DIR / ingest.XREFS_MEMBER
+    if args.refresh or not path.is_file():
+        path = await ingest.download_xrefs(RAW_DIR)
+        print(f"Downloaded {ingest.XREFS_URL}")
+    lines = ingest.read_xrefs_lines(path)
+
+    async def work(sessions: async_sessionmaker[AsyncSession]) -> int:
+        async with sessions() as session:
+            r = await ingest.load_xrefs(session, lines)
+        print(f"Source rows:            {r.source_rows:,}")
+        print(f"Skipped (votes < {ingest.XREFS_MIN_VOTES}):   {r.skipped_low_votes:,}")
+        print(f"Skipped (cross-book):   {r.skipped_cross_book:,}")
+        print(f"Skipped (unknown book): {r.skipped_unknown_book:,}")
+        print(f"Duplicates merged:      {r.duplicates:,}")
+        print(f"Loaded:                 {r.loaded:,}")
+        print(f"From a corpus book:     {r.from_corpus:,}")
+        print(f"Table size:             {r.table_bytes / 1_048_576:.1f} MB (with indexes)")
+        return 0
+
+    return await _with_sessions(settings, work)
+
+
 async def cmd_status(settings: Settings, _: argparse.Namespace) -> int:
     async def work(sessions: async_sessionmaker[AsyncSession]) -> int:
         async with sessions() as session:
@@ -132,6 +156,7 @@ async def cmd_status(settings: Settings, _: argparse.Namespace) -> int:
         print(f"Verses:    {s.verses:,} total, {s.corpus_verses:,} in corpus")
         print(f"Passages:  {s.passages:,}")
         print(f"Embedded:  {s.embedded_passages:,}/{s.passages:,} ({percent:.1f}%)")
+        print(f"Xrefs:     {s.cross_references:,}")
         print(f"DB size:   {s.database_bytes / 1_048_576:.1f} MB")
         return 0
 
@@ -143,6 +168,7 @@ COMMANDS: dict[str, Callable[[Settings, argparse.Namespace], Coroutine[Any, Any,
     "load": cmd_load,
     "chunk": cmd_chunk,
     "embed": cmd_embed,
+    "xrefs": cmd_xrefs,
     "status": cmd_status,
 }
 
@@ -158,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
         command = sub.add_parser(name)
         if name == "embed":
             command.add_argument("--limit", type=int, default=None, help="embed at most N passages")
+        if name == "xrefs":
+            command.add_argument("--refresh", action="store_true", help="download the file again")
     args = parser.parse_args(argv)
     try:
         return asyncio.run(COMMANDS[args.command](get_settings(), args))

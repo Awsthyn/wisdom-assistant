@@ -13,7 +13,7 @@ from typing import Final
 
 from app.core.books import BookInfo
 from app.core.corpus import CORPUS_BOOKS
-from app.core.references import InvalidReferenceError, Reference, parse_reference
+from app.core.references import InvalidReferenceError, parse_reference
 from app.services.search import SearchHit
 
 # `[Proverbs 3:5]`, `[Prov 3:5-6; 22:9]`. Square brackets only, on one line.
@@ -40,28 +40,13 @@ class Citation:
     url: str | None  # chapter page on ebible.org when the book is known
     valid: bool
     reason: str | None = None  # why it was discarded
+    outside_corpus: bool = False  # agent only: a valid citation of a non-wisdom book
 
 
 @dataclass(frozen=True, slots=True)
 class CitationReport:
     valid: list[Citation]
     discarded: list[Citation]
-
-
-def _format(reference: Reference) -> str:
-    name = reference.book.reference_name
-    if reference.end_verse is None:
-        if reference.start_chapter == reference.end_chapter:
-            return f"{name} {reference.start_chapter}"
-        return f"{name} {reference.start_chapter}-{reference.end_chapter}"
-    if reference.start_chapter != reference.end_chapter:
-        return (
-            f"{name} {reference.start_chapter}:{reference.start_verse}-"
-            f"{reference.end_chapter}:{reference.end_verse}"
-        )
-    if reference.start_verse == reference.end_verse:
-        return f"{name} {reference.start_chapter}:{reference.start_verse}"
-    return f"{name} {reference.start_chapter}:{reference.start_verse}-{reference.end_verse}"
 
 
 def _parts(bracket: str) -> list[str]:
@@ -110,8 +95,15 @@ def _discard(cited: str, reference: str, book: BookInfo | None, reason: str) -> 
     )
 
 
-def verify_citations(answer: str, passages: Sequence[SearchHit]) -> CitationReport:
-    """Classify every citation in `answer` against the retrieved `passages`."""
+def verify_citations(
+    answer: str, passages: Sequence[SearchHit], *, allow_outside_corpus: bool = False
+) -> CitationReport:
+    """Classify every citation in `answer` against the retrieved `passages`.
+
+    Chat (default): a citation to a book outside the corpus is always discarded.
+    Agent (`allow_outside_corpus=True`): it is valid when a tool returned that text,
+    and is flagged `outside_corpus` so the UI can present it as a cross reference.
+    """
     covered = _covered_verses(passages)
     valid: list[Citation] = []
     discarded: list[Citation] = []
@@ -128,13 +120,14 @@ def verify_citations(answer: str, passages: Sequence[SearchHit]) -> CitationRepo
                 continue
             if reference is None:
                 continue  # e.g. a verse marker like `[17]`: not a citation
-            normalized = _format(reference)
+            normalized = reference.label
             if normalized in seen:
                 continue
             seen.add(normalized)
             book = reference.book
 
-            if book.osis_code not in CORPUS_BOOKS:
+            outside_corpus = book.osis_code not in CORPUS_BOOKS
+            if outside_corpus and not allow_outside_corpus:
                 discarded.append(_discard(cited, normalized, book, REASON_OUTSIDE_CORPUS))
                 continue
             single_span = (
@@ -153,6 +146,7 @@ def verify_citations(answer: str, passages: Sequence[SearchHit]) -> CitationRepo
                     book=book.osis_code,
                     url=book.chapter_url(reference.start_chapter),
                     valid=True,
+                    outside_corpus=outside_corpus,
                 )
             )
     return CitationReport(valid=valid, discarded=discarded)

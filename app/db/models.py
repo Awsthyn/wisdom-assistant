@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -73,3 +74,44 @@ class Passage(Base):
         Vector(EMBEDDING_DIMENSIONS), nullable=True
     )
     embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CrossReference(Base):
+    """OpenBible.info cross reference: one source verse to a target verse or range.
+
+    Targets can be in any of the 66 books; ranges may cross chapters
+    (`to_chapter:to_start_verse` .. `to_end_chapter:to_end_verse`).
+    """
+
+    __tablename__ = "cross_references"
+    __table_args__ = (
+        UniqueConstraint(
+            "from_book_id",
+            "from_chapter",
+            "from_verse",
+            "to_book_id",
+            "to_chapter",
+            "to_start_verse",
+            "to_end_chapter",
+            "to_end_verse",
+            name="uq_cross_references_pair",
+        ),
+        Index(
+            "ix_cross_references_source",
+            "from_book_id",
+            "from_chapter",
+            "from_verse",
+            "votes",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    from_book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"))
+    from_chapter: Mapped[int] = mapped_column(SmallInteger)
+    from_verse: Mapped[int] = mapped_column(SmallInteger)
+    to_book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"))
+    to_chapter: Mapped[int] = mapped_column(SmallInteger)
+    to_start_verse: Mapped[int] = mapped_column(SmallInteger)
+    to_end_chapter: Mapped[int] = mapped_column(SmallInteger)
+    to_end_verse: Mapped[int] = mapped_column(SmallInteger)
+    votes: Mapped[int] = mapped_column(Integer)

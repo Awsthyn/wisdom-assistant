@@ -59,3 +59,9 @@ async def count_books(session: AsyncSession) -> tuple[int, int]:
     )
     total, in_corpus = result.one()
     return total, in_corpus
+
+
+async def book_ids(session: AsyncSession) -> dict[str, int]:
+    """`{osis_code: id}` for every book."""
+    result = await session.execute(select(Book.osis_code, Book.id))
+    return {osis: book_id for osis, book_id in result.all()}

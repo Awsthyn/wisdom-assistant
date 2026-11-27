@@ -136,6 +136,23 @@ class Reference:
     end_chapter: int
     end_verse: int | None
 
+    @property
+    def label(self) -> str:
+        """Canonical form: `Psalm 23`, `Proverbs 3:5`, `John 3:16-18`, `Romans 1:32-2:1`."""
+        name = self.book.reference_name
+        if self.end_verse is None:
+            if self.start_chapter == self.end_chapter:
+                return f"{name} {self.start_chapter}"
+            return f"{name} {self.start_chapter}-{self.end_chapter}"
+        if self.start_chapter != self.end_chapter:
+            return (
+                f"{name} {self.start_chapter}:{self.start_verse}-"
+                f"{self.end_chapter}:{self.end_verse}"
+            )
+        if self.start_verse == self.end_verse:
+            return f"{name} {self.start_chapter}:{self.start_verse}"
+        return f"{name} {self.start_chapter}:{self.start_verse}-{self.end_verse}"
+
 
 def _normalize(name: str) -> str:
     return re.sub(r"[\s.]", "", name.lower())

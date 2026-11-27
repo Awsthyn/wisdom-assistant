@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.books import BIBLE_BOOKS, BookInfo
 from app.core.corpus import CORPUS_BOOKS
-from app.core.references import parse_reference
+from app.core.references import Reference, parse_reference
 from app.ingest.chunking import VerseText, format_passage_text, format_reference
 from app.llm import Embedder, EmbedTask
 from app.repositories import passages as passages_repo
@@ -37,6 +37,10 @@ class UnknownCorpusBookError(ValueError):
 
 class ReferenceNotFoundError(LookupError):
     """The reference is well formed but none of its verses exist (e.g. `John 3:99`)."""
+
+
+class NotAReferenceError(ValueError):
+    """Text that was expected to be a reference does not parse as one."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,17 +89,36 @@ async def search(
     corpus_book = resolve_corpus_book(book) if book is not None else None
     reference = parse_reference(query)
     if reference is not None:
-        verses = await verses_repo.verses_in_range(
-            session,
-            reference.book.osis_code,
-            (reference.start_chapter, reference.start_verse),
-            (reference.end_chapter, reference.end_verse),
-        )
-        if not verses:
-            raise ReferenceNotFoundError(f"'{query.strip()}' is not in the World English Bible")
-        return SearchOutcome("reference", _group_by_chapter(reference.book, verses))
+        return SearchOutcome("reference", await reference_hits(session, reference, query))
 
     return SearchOutcome("semantic", await semantic_hits(session, embedder, query, k, corpus_book))
+
+
+async def reference_hits(
+    session: AsyncSession, reference: Reference, label: str | None = None
+) -> list[SearchHit]:
+    """The verses of `reference`, one hit per chapter. Raises `ReferenceNotFoundError`."""
+    verses = await verses_repo.verses_in_range(
+        session,
+        reference.book.osis_code,
+        (reference.start_chapter, reference.start_verse),
+        (reference.end_chapter, reference.end_verse),
+    )
+    if not verses:
+        shown = (label or "").strip() or reference.book.name
+        raise ReferenceNotFoundError(f"'{shown}' is not in the World English Bible")
+    return _group_by_chapter(reference.book, verses)
+
+
+async def lookup_reference(session: AsyncSession, text: str) -> list[SearchHit]:
+    """Exact text of a reference to any of the 66 books, one hit per chapter.
+
+    Raises `NotAReferenceError`, `InvalidReferenceError` or `ReferenceNotFoundError`.
+    """
+    reference = parse_reference(text)
+    if reference is None:
+        raise NotAReferenceError(f"'{text.strip()}' is not a Bible reference (e.g. 'Psalm 23:1')")
+    return await reference_hits(session, reference, text)
 
 
 async def semantic_hits(
