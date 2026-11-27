@@ -95,9 +95,20 @@ async def search(
             raise ReferenceNotFoundError(f"'{query.strip()}' is not in the World English Bible")
         return SearchOutcome("reference", _group_by_chapter(reference.book, verses))
 
+    return SearchOutcome("semantic", await semantic_hits(session, embedder, query, k, corpus_book))
+
+
+async def semantic_hits(
+    session: AsyncSession,
+    embedder: Embedder,
+    query: str,
+    k: int,
+    corpus_book: str | None = None,
+) -> list[SearchHit]:
+    """The `k` corpus passages most similar to `query`, best first (one embedding call)."""
     [vector] = await embedder.embed([query.strip()], EmbedTask.QUERY)
     rows = await passages_repo.nearest_passages(session, vector, k, corpus_book)
-    hits = [
+    return [
         SearchHit(
             book=_BOOKS_BY_OSIS[row.osis_code],
             chapter=row.chapter,
@@ -110,7 +121,6 @@ async def search(
         )
         for row in rows
     ]
-    return SearchOutcome("semantic", hits)
 
 
 def _group_by_chapter(book: BookInfo, verses: list[verses_repo.StoredVerse]) -> list[SearchHit]:

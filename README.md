@@ -4,7 +4,7 @@ A study assistant for the five wisdom books of the World English Bible — Job, 
 Proverbs, Ecclesiastes and Song of Songs — with semantic search, RAG chat that cites
 verses, a tool-calling agent and an MCP server.
 
-> Status: in development. Ingestion and search are done; chat comes next.
+> Status: in development. Ingestion, search and RAG chat are done; the agent comes next.
 
 ## Stack
 
@@ -115,6 +115,40 @@ stops cleanly and asks you to run it again the next day.
   (the chapter on ebible.org).
 - `q` is 3–300 characters and `k` is 1–20. If the embedding quota is exhausted, semantic
   search returns 503; exact references keep working.
+
+## Chat
+
+`POST /api/v1/chat` with `{"question": "...", "history": [...]}` (`question` 3–500
+characters; `history` at most the last 6 `user`/`assistant` messages) answers as
+Server-Sent Events:
+
+| Event | Data |
+|---|---|
+| `sources` | the retrieved passages: `id`, `reference`, `text`, `url`, `score` |
+| `token` | `{"text": ...}` answer fragments, as the LLM produces them |
+| `citations` | `valid` and `discarded` citations (each discarded one with a `reason`) |
+| `done` | `{"model": ...}` |
+| `error` | `{"code", "message"}` with code `quota_exceeded`, `no_results` or `internal` |
+
+```sh
+curl -N -X POST http://localhost:8000/api/v1/chat -H 'Content-Type: application/json' \
+  -d '{"question": "What do the wisdom books say about caring for the poor?"}'
+```
+
+How the answer stays grounded:
+
+- The top `CHAT_TOP_K` (8) corpus passages are retrieved. If the best one scores below
+  `CHAT_MIN_SCORE`, the reply is `error` / `no_results` and **the LLM is not called**.
+  The default 0.57 was calibrated on real questions with `gemini-embedding-001`
+  (on-topic 0.60–0.73, off-topic 0.49–0.59); recalibrate if the embedding model changes.
+- The prompt gives the passages numbered and delimited (`<passages>`, `<question>`),
+  and the system prompt carries the assistant principles. Prompt delimiters are
+  stripped from user text, and the system prompt says that user text never changes
+  the rules.
+- After generation, **code** (not the model) extracts every `[...]` citation,
+  including grouped ones like `[Proverbs 14:31, 22:9]`, normalizes it with the
+  reference parser and keeps it only if its book is in the corpus and every verse
+  it names is in the retrieved passages. Anything else is reported as discarded.
 
 ## Attributions
 

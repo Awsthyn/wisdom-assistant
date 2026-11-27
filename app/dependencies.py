@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
 from app.db.session import create_engine, session_factory
-from app.llm import Embedder, EmbedTask, LLMProvider, build_llm_provider
+from app.llm import Embedder, EmbedTask, LLMConfigError, LLMProvider, build_llm_provider
 
 
 class NotConfiguredError(RuntimeError):
@@ -78,3 +78,15 @@ async def get_session(
 
 def get_embedder(resources: Annotated[AppResources, Depends(_resources)]) -> Embedder:
     return LazyEmbedder(resources)
+
+
+def get_llm(resources: Annotated[AppResources, Depends(_resources)]) -> LLMProvider:
+    try:
+        return resources.llm()
+    except LLMConfigError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+def get_settings_dep(resources: Annotated[AppResources, Depends(_resources)]) -> Settings:
+    """The settings this app was created with (not the process-wide cached ones)."""
+    return resources.settings

@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import Settings, get_settings
 from app.dependencies import AppResources
-from app.routers import health, search
+from app.routers import chat, health, search
 
 DESCRIPTION = """
 Study assistant for the five wisdom books of the World English Bible
@@ -49,6 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
     app.include_router(health.router)
     app.include_router(search.router)
+    app.include_router(chat.router)
     return app
 
 
