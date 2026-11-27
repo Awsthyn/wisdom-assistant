@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.165.0",
     "google-genai>=3.6.1",
     "httpx2>=2.16.2",
+    "mcp>=2.3.0",
     "pgvector>=0.5.1",
     "pydantic>=2.14.4",
     "pydantic-settings>=2.16.3",

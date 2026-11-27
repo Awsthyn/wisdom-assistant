@@ -180,7 +180,9 @@ class GeminiProvider:
     def _config(
         self, system: str | None, tools: Sequence[ToolSpec] = ()
     ) -> types.GenerateContentConfig:
-        gemini_tools: list[types.Tool] | None = None
+        # Typed as the SDK's own union: with the `mcp` package installed it also admits
+        # MCP tools, and `list` is invariant, so `list[types.Tool]` would not match.
+        gemini_tools: list[types.ToolUnion] | None = None
         if tools:
             gemini_tools = [
                 types.Tool(

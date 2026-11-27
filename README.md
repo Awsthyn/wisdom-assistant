@@ -4,7 +4,7 @@ A study assistant for the five wisdom books of the World English Bible — Job, 
 Proverbs, Ecclesiastes and Song of Songs — with semantic search, RAG chat that cites
 verses, a tool-calling agent and an MCP server.
 
-> Status: in development. Ingestion, search, RAG chat and the tool-calling agent are done; the MCP server comes next.
+> Status: in development. Ingestion, search, RAG chat, the tool-calling agent and the MCP server are done; rate limiting, caching and quota protection come next.
 
 ## Stack
 
@@ -201,6 +201,78 @@ The agent answers as Server-Sent Events:
 - The answer arrives as a single `token` event, because `generate_with_tools` is not a
   streaming call. The `tool_call` and `tool_result` events show progress while the
   agent works.
+
+## MCP server
+
+The same three tools are available to any MCP client (Claude Desktop, Claude Code, MCP
+Inspector...) over **stdio**:
+
+```sh
+uv run python -m app.mcp_server
+```
+
+- **Tools.** `lookup_reference`, `search_passages` and `cross_references`. They are
+  not redefined for MCP: each one publishes the JSON Schema from
+  [app/tools/](app/tools/) and runs the same code as the agent.
+- **Resource.** `wisdom://attribution` (Markdown) lists the licenses of the returned
+  texts.
+- **Configuration.** The server reads `DATABASE_URL` from `.env` (the same Neon
+  database as the API). It uses `GEMINI_API_KEY` only to embed `search_passages`
+  queries, whatever `LLM_PROVIDER` is set to. `lookup_reference` and
+  `cross_references` work without any API key.
+- **Logs.** stdout carries the protocol, so logs go to stderr.
+
+The commands below run uv with `--directory` so that `.env` is found whatever the
+client's working directory is. Find your uv path with `where uv` (Windows) or
+`which uv` (macOS/Linux).
+
+### MCP Inspector
+
+```sh
+# Interactive UI in the browser:
+npx @modelcontextprotocol/inspector uv --directory C:\path\to\wisdom-assistant run python -m app.mcp_server
+
+# Or from the terminal:
+npx @modelcontextprotocol/inspector --cli uv --directory C:\path\to\wisdom-assistant run python -m app.mcp_server --method tools/list
+```
+
+In the UI, open **Tools**, pick `lookup_reference` and call it with
+`{"reference": "Proverbs 3:5-6"}`. Under **Resources** you can read
+`wisdom://attribution`.
+
+### Claude Desktop (Windows)
+
+Edit `%APPDATA%\Claude\claude_desktop_config.json` (Settings → Developer → Edit
+Config). Use absolute paths and doubled backslashes:
+
+```json
+{
+  "mcpServers": {
+    "wisdom-assistant": {
+      "command": "C:\\Users\\YOUR_USER\\.local\\bin\\uv.exe",
+      "args": [
+        "--directory",
+        "C:\\path\\to\\wisdom-assistant",
+        "run",
+        "python",
+        "-m",
+        "app.mcp_server"
+      ]
+    }
+  }
+}
+```
+
+Restart Claude Desktop. The three tools appear under the tools (🔨) menu.
+
+### Claude Code
+
+```sh
+claude mcp add wisdom-assistant --scope user -- uv --directory C:\path\to\wisdom-assistant run python -m app.mcp_server
+```
+
+Run `claude mcp list` to check that it connects. Use `--scope project` instead to
+share the server through a `.mcp.json` file in a repository.
 
 ## Attributions
 

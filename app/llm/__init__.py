@@ -25,7 +25,7 @@ from app.llm.errors import (
     QuotaExceededError,
     TransientLLMError,
 )
-from app.llm.factory import build_llm_provider
+from app.llm.factory import build_embedder, build_llm_provider
 
 __all__ = [
     "AssistantMessage",
@@ -44,5 +44,6 @@ __all__ = [
     "ToolSpec",
     "TransientLLMError",
     "UserMessage",
+    "build_embedder",
     "build_llm_provider",
 ]

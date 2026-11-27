@@ -4,7 +4,7 @@ from pydantic import SecretStr
 
 from app.core.config import Settings
 from app.llm.anthropic_provider import AnthropicProvider
-from app.llm.base import LLMProvider
+from app.llm.base import Embedder, LLMProvider
 from app.llm.errors import LLMConfigError
 from app.llm.gemini import GeminiProvider
 
@@ -30,6 +30,11 @@ def _gemini(settings: Settings, purpose: str) -> GeminiProvider:
         embedding_dimensions=settings.embedding_dimensions,
         timeout_seconds=settings.llm_timeout_seconds,
     )
+
+
+def build_embedder(settings: Settings) -> Embedder:
+    """Gemini embeddings only, whatever `LLM_PROVIDER` says (e.g. for the MCP server)."""
+    return _gemini(settings, "for embeddings")
 
 
 def build_llm_provider(settings: Settings) -> LLMProvider:
